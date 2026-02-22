@@ -5,10 +5,10 @@
 # See /LICENSE for more information.
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt using GitHub Actions
+# Description: Build OpenWrt OneCloud (Kernel 5.15 + rtl8192fu Performance Edition)
 #
 
-name: openwrt
+name: Build OneCloud + Tenda U6 (Kernel 5.15 Edition)
 
 on:
   repository_dispatch:
@@ -31,7 +31,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     
     steps:
     - name: Checkout
@@ -69,6 +69,14 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
+    - name: Use GitHub mirrors for feeds
+      run: |
+        cd openwrt
+        sed -i 's/git.openwrt.org\/feed\/packages.git/github.com\/openwrt\/packages.git/g' feeds.conf.default
+        sed -i 's/git.openwrt.org\/project\/luci.git/github.com\/openwrt\/luci.git/g' feeds.conf.default
+        sed -i 's/git.openwrt.org\/feed\/telephony.git/github.com\/openwrt\/telephony.git/g' feeds.conf.default
+        sed -i 's/git.openwrt.org\/feed\/routing.git/github.com\/openwrt\/routing.git/g' feeds.conf.default
+
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a
 
@@ -84,6 +92,26 @@ jobs:
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
+    - name: Clone custom plugins
+      run: |
+        cd openwrt
+        mkdir -p package/my
+        
+        # 删除系统自带 MosDNS 避免冲突
+        rm -rf feeds/packages/net/mosdns
+        rm -rf feeds/luci/applications/luci-app-mosdns
+        rm -rf feeds/packages/net/v2ray-geodata
+        
+        # 插件拉取
+        git clone --depth=1 https://github.com/vernesong/OpenClash.git package/my/openclash-tmp
+        mv package/my/openclash-tmp/luci-app-openclash package/my/luci-app-openclash
+        rm -rf package/my/openclash-tmp
+        git clone --depth=1 https://github.com/jerrykuku/luci-theme-argon.git package/my/luci-theme-argon
+        git clone --depth=1 -b v5 https://github.com/sbwml/luci-app-mosdns.git package/my/luci-app-mosdns
+        git clone --depth=1 https://github.com/sbwml/v2ray-geodata.git package/my/v2ray-geodata-tmp
+        mv package/my/v2ray-geodata-tmp/* package/my/
+        rm -rf package/my/v2ray-geodata-tmp
+
     - name: Load custom configuration
       run: |
         [ -e files ] && mv files openwrt/files
@@ -91,12 +119,109 @@ jobs:
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
+        
+        # 🟢 解决 IP 冲突：将默认 LAN IP 改为 192.168.2.1
+        sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
+        
+        # 自动扩容系统分区到 400M
+        sed -i 's/CONFIG_TARGET_ROOTFS_PARTSIZE=.*/CONFIG_TARGET_ROOTFS_PARTSIZE=400/g' .config
 
-
-    - name: Download package
+    - name: Download package and Inject Drivers
       id: package
       run: |
         cd openwrt
+        make defconfig
+        
+        # ==================== 核心驱动区 ====================
+        
+        # 1. 底层脱壳与光驱弹出工具链
+        echo "CONFIG_PACKAGE_usbmode=y" >> .config
+        echo "CONFIG_PACKAGE_usb-modeswitch=y" >> .config
+        echo "CONFIG_PACKAGE_usb-modeswitch-data=y" >> .config
+        echo "CONFIG_PACKAGE_eject=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-scsi-core=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-scsi-cdrom=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-storage=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-storage-extras=y" >> .config
+        
+        # 2. 欧本 M03X 随身WiFi 驱动
+        echo "CONFIG_PACKAGE_kmod-usb-net-rndis=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-net-huawei-cdc-ncm=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-serial-option=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
+        
+        # 3. 🟢 腾达 U6 驱动 (Kernel 5.15 性能最优解)
+        # 彻底移除原生 rtl8xxxu，换用高性能的独立 rtl8192fu 驱动
+        sed -i '/CONFIG_PACKAGE_kmod-rtl8xxxu=y/d' .config
+        echo "CONFIG_PACKAGE_kmod-rtl8192fu=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-mac80211=y" >> .config
+        echo "CONFIG_PACKAGE_kmod-cfg80211=y" >> .config
+        echo "CONFIG_PACKAGE_wpad-basic-mbedtls=y" >> .config
+        echo "CONFIG_PACKAGE_wireless-tools=y" >> .config
+        echo "CONFIG_PACKAGE_iw=y" >> .config
+        
+        # 4. 实用插件增强
+        echo "CONFIG_PACKAGE_usbutils=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-watchcat=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+        echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
+        
+        # 5. 🟢 强制解决 dnsmasq 冲突
+        sed -i '/CONFIG_PACKAGE_dnsmasq=y/d' .config
+        sed -i '/CONFIG_DEFAULT_dnsmasq=y/d' .config
+        echo "# CONFIG_PACKAGE_dnsmasq is not set" >> .config
+        echo "# CONFIG_DEFAULT_dnsmasq is not set" >> .config
+        echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+
+        # ==================== 🟢 注入海陆空四重脱壳脚本 ====================
+        
+        # 方案 1: Hotplug 即插即用触发
+        mkdir -p package/base-files/files/etc/hotplug.d/usb/
+        cat <<'EOF' > package/base-files/files/etc/hotplug.d/usb/99-tenda-u6-hotplug
+        #!/bin/sh
+        if [ "$ACTION" = "add" ] || [ "$ACTION" = "bind" ]; then
+            if lsusb | grep -qi "0bda:a192"; then
+                logger -t "Tenda-U6-Hotplug" "Found 0bda:a192 DISK mode! Engaging Multi-Plan Switch..."
+                /sbin/usbmode -s 2>/dev/null
+                /usr/bin/usb_modeswitch -v 0bda -p a192 -u 3 2>/dev/null
+                /usr/bin/usb_modeswitch -v 0bda -p a192 -K 2>/dev/null
+                /usr/bin/eject /dev/sr0 2>/dev/null
+                /usr/bin/eject /dev/sda 2>/dev/null
+                for dev in /sys/bus/usb/devices/*; do
+                    if grep -q "0bda" "$dev/idVendor" 2>/dev/null && grep -q "a192" "$dev/idProduct" 2>/dev/null; then
+                        logger -t "Tenda-U6-Hotplug" "Applying nuclear option: overriding bConfigurationValue on $dev"
+                        echo 1 > "$dev/bConfigurationValue" 2>/dev/null
+                    fi
+                done
+            fi
+        fi
+        EOF
+        chmod +x package/base-files/files/etc/hotplug.d/usb/99-tenda-u6-hotplug
+
+        # 方案 2: 开机自动巡检保底脚本
+        mkdir -p package/base-files/files/etc/uci-defaults/
+        cat <<'EOF' > package/base-files/files/etc/uci-defaults/99-tenda-u6-boot
+        #!/bin/sh
+        (
+            sleep 15
+            if lsusb | grep -qi "0bda:a192"; then
+                logger -t "Tenda-U6-Boot" "Tenda U6 stuck in DISK mode on boot. Re-triggering hotplug script..."
+                /usr/bin/usb_modeswitch -v 0bda -p a192 -u 3 2>/dev/null
+                /usr/bin/eject /dev/sr0 2>/dev/null
+                for dev in /sys/bus/usb/devices/*; do
+                    if grep -q "0bda" "$dev/idVendor" 2>/dev/null && grep -q "a192" "$dev/idProduct" 2>/dev/null; then
+                        echo 1 > "$dev/bConfigurationValue" 2>/dev/null
+                    fi
+                done
+            fi
+        ) &
+        exit 0
+        EOF
+        chmod +x package/base-files/files/etc/uci-defaults/99-tenda-u6-boot
+        
+        # ===============================================================
+        
         make defconfig
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
@@ -167,6 +292,23 @@ jobs:
           sudo rm -rf openwrt/bin/targets/*/*/*.img
           sudo rm -rf openwrt/bin/targets/*/*/*.gz
 
+    - name: Extract Packages
+      if: env.UPLOAD_PACKAGES == 'true' && steps.compile.outputs.status == 'success'
+      run: |
+        cd openwrt
+        mkdir -p $GITHUB_WORKSPACE/my_plugins
+        find bin/packages bin/targets -name "luci-app-openclash*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
+        find bin/packages bin/targets -name "*mosdns*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
+        find bin/packages bin/targets -name "luci-theme-argon*.ipk" -exec cp {} $GITHUB_WORKSPACE/my_plugins/ \;
+        echo "PACKAGES_DIR=$GITHUB_WORKSPACE/my_plugins" >> $GITHUB_ENV
+
+    - name: Upload specific Packages to Artifact
+      uses: actions/upload-artifact@main
+      if: env.UPLOAD_PACKAGES == 'true' && steps.compile.outputs.status == 'success'
+      with:
+        name: OneCloud_Plugins_IPK${{ env.FILE_DATE }}
+        path: ${{ env.PACKAGES_DIR }}/*.ipk
+
     - name: Check space usage
       if: (!cancelled())
       run: df -hT
@@ -198,8 +340,13 @@ jobs:
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        echo "release_tag=U6-Kernel5.15-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
+        echo "玩客云 (OneCloud) 性能优化版固件 (Kernel 5.15)" >> release.txt
+        echo "驱动配置：采用专用 kmod-rtl8192fu 驱动，提供最优 AP 模式性能与吞吐量" >> release.txt
+        echo "火力全开：集成 usbmode + modeswitch + eject + bConfig 覆写四重自动化脱壳脚本" >> release.txt
+        echo "包含插件: OpenClash, MosDNS v5, Watchcat, SQM, TTYD" >> release.txt
+        echo "默认管理 IP: 192.168.2.1" >> release.txt
         [ $UPLOAD_COWTRANSFER = true ] && echo "🔗 [Cowtransfer](${{ steps.cowtransfer.outputs.url }})" >> release.txt
         [ $UPLOAD_WETRANSFER = true ] && echo "🔗 [WeTransfer](${{ steps.wetransfer.outputs.url }})" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
@@ -208,11 +355,13 @@ jobs:
       uses: softprops/action-gh-release@master
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
-        GITHUB_TOKEN: ${{ secrets.TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
+        files: |
+          ${{ env.FIRMWARE }}/*
+          ${{ env.PACKAGES_DIR }}/*.ipk
         
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
@@ -227,4 +376,4 @@ jobs:
         keep_latest: 3
         delete_tags: true
       env:
-        GITHUB_TOKEN: ${{ secrets.TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
