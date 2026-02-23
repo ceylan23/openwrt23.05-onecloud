@@ -5,7 +5,7 @@
 # See /LICENSE for more information.
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt OneCloud (Kernel 5.15 + rtl8192fu Performance Edition + ARM Crypto Fix)
+# Description: Build OpenWrt OneCloud (Kernel 5.15 + rtl8192fu Performance Edition + Crypto Fix)
 #
 
 name: Build OneCloud + Tenda U6 (Kernel 5.15 Edition)
@@ -131,10 +131,11 @@ jobs:
       run: |
         cd openwrt
         
-        # 🟢 修复 ARM 架构下 crypto-sha 模块缺失导致编译失败的 Bug
-        echo "CONFIG_CRYPTO_SHA1_ARM=m" >> target/linux/amlogic/meson8b/config-5.15
-        echo "CONFIG_CRYPTO_SHA256_ARM=m" >> target/linux/amlogic/meson8b/config-5.15
-        echo "CONFIG_CRYPTO_SHA512_ARM=m" >> target/linux/amlogic/meson8b/config-5.15
+        # ==================== 🟢 终极修复 ARM Crypto 编译失败 ====================
+        # 直接去 Makefile 里删掉对 sha1-arm / sha256-arm / sha512-arm 的死板打包要求，让系统乖乖用通用的 generic 模块
+        sed -i '/sha1-arm.ko/d' package/kernel/linux/modules/crypto.mk
+        sed -i '/sha256-arm.ko/d' package/kernel/linux/modules/crypto.mk
+        sed -i '/sha512-arm.ko/d' package/kernel/linux/modules/crypto.mk
         
         make defconfig
         
@@ -351,7 +352,7 @@ jobs:
         echo "玩客云 (OneCloud) 性能优化版固件 (Kernel 5.15)" >> release.txt
         echo "驱动配置：采用专用 kmod-rtl8192fu 驱动，提供最优 AP 模式性能与吞吐量" >> release.txt
         echo "火力全开：集成 usbmode + modeswitch + eject + bConfig 覆写四重自动化脱壳脚本" >> release.txt
-        echo "编译修复：已修复 OpenClash 依赖的 ARM 架构 crypto-sha 模块缺失问题" >> release.txt
+        echo "编译修复：强力移除 Makefile 中的死板规则，彻底解决 ARM Crypto 编译失败" >> release.txt
         echo "包含插件: OpenClash, MosDNS v5, Watchcat, SQM, TTYD" >> release.txt
         echo "默认管理 IP: 192.168.2.1" >> release.txt
         [ $UPLOAD_COWTRANSFER = true ] && echo "🔗 [Cowtransfer](${{ steps.cowtransfer.outputs.url }})" >> release.txt
