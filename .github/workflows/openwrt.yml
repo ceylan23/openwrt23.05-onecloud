@@ -5,7 +5,7 @@
 # See /LICENSE for more information.
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt OneCloud (Kernel 5.15 + rtl8192fu Performance Edition + Crypto Fix)
+# Description: Build OpenWrt OneCloud (Kernel 5.15 + rtl8192fu Performance + ACA Power Fix)
 #
 
 name: Build OneCloud + Tenda U6 (Kernel 5.15 Edition)
@@ -132,10 +132,31 @@ jobs:
         cd openwrt
         
         # ==================== 🟢 终极修复 ARM Crypto 编译失败 ====================
-        # 直接去 Makefile 里删掉对 sha1-arm / sha256-arm / sha512-arm 的死板打包要求，让系统乖乖用通用的 generic 模块
         sed -i '/sha1-arm.ko/d' package/kernel/linux/modules/crypto.mk
         sed -i '/sha256-arm.ko/d' package/kernel/linux/modules/crypto.mk
         sed -i '/sha512-arm.ko/d' package/kernel/linux/modules/crypto.mk
+        
+        # ==================== 🟢 强行注入 USB ACA 供电破解补丁 (适配 5.15) ====================
+        mkdir -p target/linux/amlogic/patches-5.15
+        cat <<'EOF' > target/linux/amlogic/patches-5.15/999-usb-disable-ACA-check.patch
+        --- a/drivers/phy/amlogic/phy-meson8b-usb2.c
+        +++ b/drivers/phy/amlogic/phy-meson8b-usb2.c
+        @@ -195,12 +195,12 @@ static int phy_meson8b_usb2_power_on(struct phy *phy)
+         			udelay(ACA_ENABLE_COMPLETE_TIME);
+         
+         			regmap_read(priv->regmap, REG_ADP_BC, &reg);
+        -			if (reg & REG_ADP_BC_ACA_PIN_FLOAT) {
+        +			/*if (reg & REG_ADP_BC_ACA_PIN_FLOAT) {
+         				dev_warn(&phy->dev, "USB ID detect failed!\n");
+         				clk_disable_unprepare(priv->clk_usb);
+         				clk_disable_unprepare(priv->clk_usb_general);
+         				return -EINVAL;
+        -			}
+        +			}*/
+         		}
+         	}
+        EOF
+        echo "✅ Kernel 5.15 USB Power Patch Injected!"
         
         make defconfig
         
@@ -159,7 +180,6 @@ jobs:
         echo "CONFIG_PACKAGE_kmod-usb-acm=y" >> .config
         
         # 3. 🟢 腾达 U6 驱动 (Kernel 5.15 性能最优解)
-        # 彻底移除原生 rtl8xxxu，换用高性能的独立 rtl8192fu 驱动
         sed -i '/CONFIG_PACKAGE_kmod-rtl8xxxu=y/d' .config
         echo "CONFIG_PACKAGE_kmod-rtl8192fu=y" >> .config
         echo "CONFIG_PACKAGE_kmod-mac80211=y" >> .config
@@ -350,6 +370,7 @@ jobs:
         echo "release_tag=U6-Kernel5.15-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
         echo "玩客云 (OneCloud) 性能优化版固件 (Kernel 5.15)" >> release.txt
+        echo "供电破解：已在内核层植入 Disable ACA Check 补丁，完美解决高功耗网卡断流问题" >> release.txt
         echo "驱动配置：采用专用 kmod-rtl8192fu 驱动，提供最优 AP 模式性能与吞吐量" >> release.txt
         echo "火力全开：集成 usbmode + modeswitch + eject + bConfig 覆写四重自动化脱壳脚本" >> release.txt
         echo "编译修复：强力移除 Makefile 中的死板规则，彻底解决 ARM Crypto 编译失败" >> release.txt
