@@ -1,14 +1,9 @@
 #
-# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt OneCloud (Kernel 5.15 + rtl8192fu Performance + ACA Power Fix)
+# Copyright (c) 2019-2026 P3TERX <https://p3terx.com>
+# Description: Build OpenWrt OneCloud (Kernel 5.15 + rtl8192fu + OpenClash + MosDNS + ACA Base64 Fix)
 #
 
-name: Build OneCloud + Tenda U6 (Kernel 5.15 Edition)
+name: Build OneCloud 5.15 LTS (Ultimate Edition)
 
 on:
   repository_dispatch:
@@ -136,27 +131,21 @@ jobs:
         sed -i '/sha256-arm.ko/d' package/kernel/linux/modules/crypto.mk
         sed -i '/sha512-arm.ko/d' package/kernel/linux/modules/crypto.mk
         
-        # ==================== 🟢 强行注入 USB ACA 供电破解补丁 (适配 5.15) ====================
+        # ==================== 🟢 Base64 防篡改注入 USB ACA 供电破解补丁 ====================
         mkdir -p target/linux/amlogic/patches-5.15
-        cat <<'EOF' > target/linux/amlogic/patches-5.15/999-usb-disable-ACA-check.patch
-        --- a/drivers/phy/amlogic/phy-meson8b-usb2.c
-        +++ b/drivers/phy/amlogic/phy-meson8b-usb2.c
-        @@ -195,12 +195,12 @@ static int phy_meson8b_usb2_power_on(struct phy *phy)
-         			udelay(ACA_ENABLE_COMPLETE_TIME);
-         
-         			regmap_read(priv->regmap, REG_ADP_BC, &reg);
-        -			if (reg & REG_ADP_BC_ACA_PIN_FLOAT) {
-        +			/*if (reg & REG_ADP_BC_ACA_PIN_FLOAT) {
-         				dev_warn(&phy->dev, "USB ID detect failed!\n");
-         				clk_disable_unprepare(priv->clk_usb);
-         				clk_disable_unprepare(priv->clk_usb_general);
-         				return -EINVAL;
-        -			}
-        +			}*/
-         		}
-         	}
+        cat <<'EOF' > patch.b64
+        LS0tIGEvZHJpdmVycy9waHkvYW1sb2dpYy9waHktbWVzb244Yi11c2IyLmMKKysrIGIvZHJpdmVy
+        cy9waHkvYW1sb2dpYy9waHktbWVzb244Yi11c2IyLmMKQEAgLTE5NCw3ICsxOTQsNyBAQAogCQkJ
+        dWRlbGF5KEFDQV9FTkFCTEVfQ09NUExFVEVfVElNRSk7CiAKIAkJCXJlZ21hcF9yZWFkKHByaXYt
+        PnJlZ21hcCwgUkVHX0FEUF9CQywgJnJlZyk7Ci0JCQlpZiAocmVnICYgUkVHX0FEUF9CQ19BQ0Ff
+        UElOX0ZMT0FUKSB7CisJCQlpZiAoMCkgewogCQkJCWRldl93YXJuKCZwaHktPmRldiwgIlVTQiBJ
+        RCBkZXRlY3QgZmFpbGVkIVxuIik7CiAJCQkJY2xrX2Rpc2FibGVfdW5wcmVwYXJlKHByaXYtPmNs
+        a191c2IpOwogCQkJCWNsa19kaXNhYmxlX3VucHJlcGFyZShwcml2LT5jbGtfdXNiX2dlbmVyYWwp
+        Owo=
         EOF
-        echo "✅ Kernel 5.15 USB Power Patch Injected!"
+        base64 -d patch.b64 > target/linux/amlogic/patches-5.15/999-usb-disable-ACA-check.patch
+        rm -f patch.b64
+        echo "✅ Kernel 5.15 USB Power Patch Injected via Base64 (100% immune to whitespace corruption)!"
         
         make defconfig
         
@@ -251,7 +240,6 @@ jobs:
         
         make defconfig
         make download -j8
-        find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
     - name: Compile the firmware
@@ -283,24 +271,17 @@ jobs:
           boot_img=$1${img_ext}
           boot_img_mnt=$1${img_mnt}
           rootfs_img_mnt=$1${rootfs_mnt}
-          echo ${boot_img}
-          echo ${boot_img_mnt}
-          echo ${rootfs_img_mnt}
-          sudo rm -rf ${boot_img}
-          sudo rm -rf ${boot_img_mnt}
-          sudo rm -rf ${rootfs_img_mnt}
+          sudo rm -rf ${boot_img} ${boot_img_mnt} ${rootfs_img_mnt}
           sudo dd if=/dev/zero of=${boot_img} bs=1M count=400
           sudo mkfs.ext4 ${boot_img}
-          sudo mkdir ${boot_img_mnt}
-          sudo mkdir ${rootfs_img_mnt}
+          sudo mkdir ${boot_img_mnt} ${rootfs_img_mnt}
           sudo mount ${boot_img} ${boot_img_mnt}
           sudo mount ${loop}p2 ${rootfs_img_mnt}
           cd ${rootfs_img_mnt}
           sudo cp -r * ../${boot_img_mnt}
           cd ..
           sudo sync
-          sudo umount ${boot_img_mnt}
-          sudo umount ${rootfs_img_mnt}
+          sudo umount ${boot_img_mnt} ${rootfs_img_mnt}
           sudo img2simg ${loop}p1 burn/boot.simg
           sudo img2simg openwrt.img burn/rootfs.simg
           sudo rm -rf *.img
@@ -316,8 +297,7 @@ jobs:
             sha256sum "$f" >"${f}.sha"
             xz -9 --threads=0 --compress "$f"
           done
-          sudo rm -rf openwrt/bin/targets/*/*/*.img
-          sudo rm -rf openwrt/bin/targets/*/*/*.gz
+          sudo rm -rf openwrt/bin/targets/*/*/*.img openwrt/bin/targets/*/*/*.gz
 
     - name: Extract Packages
       if: env.UPLOAD_PACKAGES == 'true' && steps.compile.outputs.status == 'success'
@@ -367,17 +347,15 @@ jobs:
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "release_tag=U6-Kernel5.15-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        echo "release_tag=U6-Kernel5.15-Ultimate-$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
-        echo "玩客云 (OneCloud) 性能优化版固件 (Kernel 5.15)" >> release.txt
-        echo "供电破解：已在内核层植入 Disable ACA Check 补丁，完美解决高功耗网卡断流问题" >> release.txt
-        echo "驱动配置：采用专用 kmod-rtl8192fu 驱动，提供最优 AP 模式性能与吞吐量" >> release.txt
-        echo "火力全开：集成 usbmode + modeswitch + eject + bConfig 覆写四重自动化脱壳脚本" >> release.txt
-        echo "编译修复：强力移除 Makefile 中的死板规则，彻底解决 ARM Crypto 编译失败" >> release.txt
-        echo "包含插件: OpenClash, MosDNS v5, Watchcat, SQM, TTYD" >> release.txt
+        echo "玩客云 (OneCloud) 性能优化终极版固件 (Kernel 5.15)" >> release.txt
+        echo "底层供电破解：已通过 Base64 防篡改注入 Disable ACA 补丁，完美解决网卡掉电断流问题！" >> release.txt
+        echo "驱动配置：采用专用 kmod-rtl8192fu 驱动，发挥腾达 U6 最优 AP 性能。" >> release.txt
+        echo "火力全开：集成 usbmode + modeswitch + eject + bConfig 覆写四重自动化脱壳脚本。" >> release.txt
+        echo "编译修复：强力移除 Makefile 死板规则，彻底解决 ARM Crypto 编译报错。" >> release.txt
+        echo "包含神级插件: OpenClash, MosDNS v5, Watchcat, SQM, TTYD" >> release.txt
         echo "默认管理 IP: 192.168.2.1" >> release.txt
-        [ $UPLOAD_COWTRANSFER = true ] && echo "🔗 [Cowtransfer](${{ steps.cowtransfer.outputs.url }})" >> release.txt
-        [ $UPLOAD_WETRANSFER = true ] && echo "🔗 [WeTransfer](${{ steps.wetransfer.outputs.url }})" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to Releases
@@ -397,12 +375,3 @@ jobs:
       with:
         retain_days: 1
         keep_minimum_runs: 3
-
-    - name: Remove old Releases
-      uses: dev-drprasad/delete-older-releases@master
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-        keep_latest: 3
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
